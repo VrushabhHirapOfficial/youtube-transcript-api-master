@@ -12,6 +12,8 @@ from youtube_transcript_api._errors import (
 import re
 import os
 
+# Added this comment to force a new commit for GitHub visibility!
+
 app = FastAPI(
     title="YouTube Transcript API",
     description="Fetch the transcript of any YouTube video by passing its video ID or full URL.",
