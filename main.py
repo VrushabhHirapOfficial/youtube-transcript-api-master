@@ -1,6 +1,7 @@
 from fastapi import FastAPI, Query, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from youtube_transcript_api import YouTubeTranscriptApi
+from youtube_transcript_api.proxies import WebshareProxyConfig
 from youtube_transcript_api._errors import (
     TranscriptsDisabled,
     NoTranscriptFound,
@@ -9,6 +10,7 @@ from youtube_transcript_api._errors import (
     IpBlocked,
 )
 import re
+import os
 
 app = FastAPI(
     title="YouTube Transcript API",
@@ -16,7 +18,7 @@ app = FastAPI(
     version="1.0.0",
 )
 
-# Allow requests from any origin (so your Chrome extension / frontend can call it)
+# Allow requests from any origin (Chrome extension, frontend, Postman, etc.)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -24,16 +26,30 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Read proxy credentials from environment variables (set these in Render dashboard)
+WEBSHARE_USERNAME = os.environ.get("WEBSHARE_USERNAME")
+WEBSHARE_PASSWORD = os.environ.get("WEBSHARE_PASSWORD")
+
+
+def get_api():
+    """Create YouTubeTranscriptApi instance, using Webshare proxy if credentials exist."""
+    if WEBSHARE_USERNAME and WEBSHARE_PASSWORD:
+        return YouTubeTranscriptApi(
+            proxy_config=WebshareProxyConfig(
+                proxy_username=WEBSHARE_USERNAME,
+                proxy_password=WEBSHARE_PASSWORD,
+            )
+        )
+    return YouTubeTranscriptApi()
+
 
 def extract_video_id(video_id_or_url: str) -> str:
-    """Accepts both a raw video ID and a full YouTube URL."""
-    # If it looks like a URL, extract the ID
+    """Accepts both a raw video ID or a full YouTube URL."""
     if "youtube.com" in video_id_or_url or "youtu.be" in video_id_or_url:
         match = re.search(r"(?:v=|youtu\.be/)([a-zA-Z0-9_-]{11})", video_id_or_url)
         if match:
             return match.group(1)
         raise HTTPException(status_code=400, detail="Could not extract video ID from the provided URL.")
-    # Otherwise assume it's already a raw ID
     return video_id_or_url.strip()
 
 
@@ -44,30 +60,28 @@ def root():
         "usage": "GET /transcript?video_id=<VIDEO_ID>",
         "example": "/transcript?video_id=dQw4w9WgXcQ",
         "docs": "/docs",
+        "proxy_enabled": bool(WEBSHARE_USERNAME and WEBSHARE_PASSWORD),
     }
 
 
 @app.get("/transcript")
 def get_transcript(
-    video_id: str = Query(..., description="YouTube video ID (e.g. dQw4w9WgXcQ) or full URL"),
-    language: str = Query("en", description="Language code, default is 'en' (English)"),
+    video_id: str = Query(..., description="YouTube video ID or full URL"),
+    language: str = Query("en", description="Language code (default: en)"),
 ):
     """
     Fetch the full transcript of a YouTube video.
-
     - **video_id**: The YouTube video ID (e.g. `dQw4w9WgXcQ`) or full URL
     - **language**: Language code to fetch transcript in (default: `en`)
     """
     vid = extract_video_id(video_id)
 
     try:
-        api = YouTubeTranscriptApi()
+        api = get_api()
 
-        # Try requested language first, fallback to any available language
         try:
             transcript = api.fetch(vid, languages=[language])
         except NoTranscriptFound:
-            # Auto-pick any available transcript
             transcript_list = api.list(vid)
             transcript = next(iter(transcript_list)).fetch()
 
@@ -75,7 +89,6 @@ def get_transcript(
             {"text": s.text, "start": round(s.start, 2), "duration": round(s.duration, 2)}
             for s in transcript
         ]
-
         full_text = " ".join(s.text for s in transcript)
 
         return {
@@ -94,6 +107,9 @@ def get_transcript(
     except VideoUnavailable:
         raise HTTPException(status_code=404, detail="Video is unavailable or does not exist.")
     except (RequestBlocked, IpBlocked):
-        raise HTTPException(status_code=429, detail="YouTube has blocked this server's IP. Try again later or use a proxy.")
+        raise HTTPException(
+            status_code=429,
+            detail="YouTube has blocked this server's IP. Add WEBSHARE_USERNAME and WEBSHARE_PASSWORD env vars in Render to fix this."
+        )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
