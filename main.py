@@ -40,6 +40,8 @@ def get_api():
             proxy_config=WebshareProxyConfig(
                 proxy_username=WEBSHARE_USERNAME,
                 proxy_password=WEBSHARE_PASSWORD,
+                # Try a mix of countries to find one that isn't rate-limited
+                filter_ip_locations=["us", "gb", "de", "ca", "nl"]
             )
         )
     return YouTubeTranscriptApi()
